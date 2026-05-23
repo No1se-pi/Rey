@@ -1,0 +1,11 @@
+python-dotenv
+requests
+sqlalchemy
+pytest
+
+# Optional voice dependencies:
+# faster-whisper
+# sounddevice
+# scipy
+# pyttsx3
+
