@@ -10,7 +10,7 @@ MVP не делает Live2D/VRM и не притворяется полноце
 - системный промпт личности;
 - SQLite-история сообщений;
 - простая долговременная память;
-- команды `/memory`, `/forget <id>`, `/history`, `/state`, `/voice`, `/text`, `/exit`;
+- команды `/memory`, `/forget <id>`, `/history`, `/state`, `/voices`, `/voice`, `/text`, `/exit`;
 - structured response внутри программы: `text`, `emotion`, `action`, `animation_hint`, `memory_candidates`;
 - состояние аватара: `idle`, `listening`, `thinking`, `speaking` и эмоции;
 - эвристики сложности вопроса и детского контекста;
@@ -87,12 +87,21 @@ TTS_RATE=175
 TTS_VOLUME=0.9
 ```
 
+На Windows можно использовать более устойчивый backend:
+
+```env
+TTS_ENGINE=windows_sapi
+TTS_VOICE_NAME=Microsoft Irina Desktop
+TTS_RATE=155
+```
+
 ## Команды CLI
 
 - `/memory` - показать сохранённую память;
 - `/forget <id>` - удалить запись памяти;
 - `/history` - показать последние сообщения текущей сессии;
 - `/state` - показать текущее состояние Рей для будущего аватара;
+- `/voices` - показать доступные TTS-голоса;
 - `/voice` - запустить голосовой режим;
 - `/text` - вернуться к текстовому режиму;
 - `/exit` - выйти.

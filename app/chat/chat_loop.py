@@ -135,7 +135,7 @@ class ChatLoop:
             self.service.avatar_state.set_idle()
 
     def _write_intro(self) -> None:
-        print("Rei MVP CLI. Команды: /memory, /forget <id>, /history, /state, /voice, /text, /exit")
+        print("Rei MVP CLI. Команды: /memory, /forget <id>, /history, /state, /voices, /voice, /text, /exit")
         print("Рей: Я на месте. Давай разбираться.")
 
     def _handle_command(self, command: str) -> bool:
@@ -155,6 +155,9 @@ class ChatLoop:
         if command == "/state":
             self._show_state()
             return True
+        if command == "/voices":
+            self._show_voices()
+            return True
         if command == "/voice":
             self._start_voice_mode()
             return True
@@ -162,7 +165,7 @@ class ChatLoop:
             print("Рей: Текстовый режим уже включён.")
             return True
 
-        print("Рей: Не знаю такую команду. Доступны /memory, /forget <id>, /history, /state, /voice, /text, /exit.")
+        print("Рей: Не знаю такую команду. Доступны /memory, /forget <id>, /history, /state, /voices, /voice, /text, /exit.")
         return True
 
     def _show_memory(self) -> None:
@@ -207,6 +210,25 @@ class ChatLoop:
             f"speaking={state['speaking']}, "
             f"animation_hint={state['animation_hint']}"
         )
+
+    def _show_voices(self) -> None:
+        from app.voice.tts import TextToSpeech
+
+        tts = TextToSpeech(settings=self.service.settings)
+        available, message = tts.check_availability()
+        if not available:
+            print(f"Рей: {message}")
+            return
+        voices = tts.list_voices()
+        if not voices:
+            print("Рей: Не смогла получить список голосов.")
+            return
+        print("Доступные голоса:")
+        for voice in voices:
+            name = voice.get("name", "")
+            language = voice.get("language", "")
+            gender = voice.get("gender", "")
+            print(f"  {name} [{language}] {gender}".rstrip())
 
     def _start_voice_mode(self) -> None:
         from app.voice.voice_loop import VoiceLoop
