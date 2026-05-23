@@ -17,6 +17,8 @@ class SpeechToText:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
         self._model = None
+        self._forced_device: str | None = None
+        self._forced_compute_type: str | None = None
 
     def check_availability(self) -> tuple[bool, str]:
         missing: list[str] = []
@@ -40,9 +42,16 @@ class SpeechToText:
 
         try:
             record_wav(wav_path, duration_seconds=duration_seconds)
-            model = self._get_model()
-            segments, _info = model.transcribe(str(wav_path), language="ru", vad_filter=True)
-            text = " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
+            try:
+                text = self._transcribe_file(wav_path)
+            except RuntimeError as exc:
+                if not self._should_retry_on_cpu(exc):
+                    raise
+                logger.warning("STT GPU runtime failed; retrying with CPU int8. error=%s", exc)
+                self._model = None
+                self._forced_device = "cpu"
+                self._forced_compute_type = "int8"
+                text = self._transcribe_file(wav_path)
             logger.info("STT finished text_length=%s", len(text))
             return text
         finally:
@@ -51,19 +60,32 @@ class SpeechToText:
             except OSError:
                 logger.warning("Failed to remove temporary wav file: %s", wav_path)
 
+    def _transcribe_file(self, wav_path: Path) -> str:
+        model = self._get_model()
+        segments, _info = model.transcribe(str(wav_path), language="ru", vad_filter=True)
+        return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
+
     def _get_model(self):
         if self._model is not None:
             return self._model
 
         from faster_whisper import WhisperModel
 
-        compute_type = self.settings.stt_compute_type
+        device = self._forced_device or self.settings.stt_device
+        compute_type = self._forced_compute_type or self.settings.stt_compute_type
         if compute_type == "auto":
-            compute_type = "default"
+            compute_type = "int8" if device == "cpu" else "default"
+        logger.info("Loading STT model size=%s device=%s compute_type=%s", self.settings.stt_model_size, device, compute_type)
         self._model = WhisperModel(
             self.settings.stt_model_size,
-            device=self.settings.stt_device,
+            device=device,
             compute_type=compute_type,
         )
         return self._model
 
+    def _should_retry_on_cpu(self, exc: RuntimeError) -> bool:
+        if self._forced_device == "cpu":
+            return False
+        message = str(exc).lower()
+        cuda_markers = ("cuda", "cublas", "cudnn", "cufft", "cublas64")
+        return any(marker in message for marker in cuda_markers)

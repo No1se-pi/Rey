@@ -29,8 +29,8 @@ def test_maybe_extract_memory_uses_explicit_markers(tmp_path):
     saved = manager.maybe_extract_memory("Запомни, что мой проект называется Rei.")
 
     assert len(saved) == 1
-    assert saved[0].key == "note"
-    assert "мой проект называется Rei" in saved[0].value
+    assert saved[0].key == "project"
+    assert "называется Rei" in saved[0].value
 
 
 def test_maybe_extract_memory_skips_sensitive(tmp_path):
@@ -41,4 +41,3 @@ def test_maybe_extract_memory_skips_sensitive(tmp_path):
 
     assert saved == []
     assert manager.get_memories() == []
-

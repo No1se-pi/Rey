@@ -121,6 +121,7 @@ class MemoryManager:
         if name_match:
             candidates.append(ExtractedMemory("user_name", self._clean_value(name_match.group(1)), importance=3))
 
+        generic_notes: list[ExtractedMemory] = []
         for pattern, key in (
             (r"(?:я люблю|мне нравится)\s+(.+)", "preference"),
             (r"я работаю над\s+(.+)", "current_work"),
@@ -131,7 +132,14 @@ class MemoryManager:
             if match:
                 value = self._clean_value(match.group(1))
                 if value:
-                    candidates.append(ExtractedMemory(key, value, importance=2 if key in {"project", "current_work"} else 1))
+                    candidate = ExtractedMemory(key, value, importance=2 if key in {"project", "current_work"} else 1)
+                    if key == "note":
+                        generic_notes.append(candidate)
+                    else:
+                        candidates.append(candidate)
+
+        if not candidates:
+            candidates.extend(generic_notes)
 
         return self._deduplicate(candidates)
 
@@ -150,4 +158,3 @@ class MemoryManager:
                 seen.add(marker)
                 result.append(candidate)
         return result
-
