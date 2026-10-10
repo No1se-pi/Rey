@@ -5,7 +5,6 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-
 logger = logging.getLogger(__name__)
 
 VALID_EMOTIONS = {"warm", "neutral", "happy", "sad", "playful", "thinking", "confused", "serious"}
@@ -86,19 +85,36 @@ def _coerce_list(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _plain_text_response(raw_response: str) -> ReiResponse:
+    """Accept the legacy text footer without exposing its avatar controls."""
+    lines = raw_response.strip().splitlines()
+    if lines:
+        footer = [part.strip().lower() for part in lines[-1].split("|")]
+        if (
+            len(footer) == 3
+            and footer[0] in VALID_EMOTIONS
+            and footer[1] in VALID_ANIMATION_HINTS
+            and footer[2] in VALID_ACTIONS
+        ):
+            text = "\n".join(lines[:-1]).strip()
+            if text:
+                return ReiResponse(text=text, emotion=footer[0], animation_hint=footer[1], action=footer[2])
+    return ReiResponse(text=raw_response.strip(), emotion="neutral", action="speaking")
+
+
 def parse_rei_response(raw_response: str) -> ReiResponse:
     json_payload = _extract_json_object(raw_response)
     if json_payload is None:
-        return ReiResponse(text=raw_response.strip(), emotion="neutral", action="speaking")
+        return _plain_text_response(raw_response)
 
     try:
         payload = json.loads(json_payload)
     except json.JSONDecodeError:
         logger.warning("Failed to parse Rei structured response; falling back to plain text.")
-        return ReiResponse(text=raw_response.strip(), emotion="neutral", action="speaking")
+        return _plain_text_response(raw_response)
 
     if not isinstance(payload, dict):
-        return ReiResponse(text=raw_response.strip(), emotion="neutral", action="speaking")
+        return _plain_text_response(raw_response)
 
     text = str(payload.get("text") or "").strip() or raw_response.strip()
     emotion = str(payload.get("emotion") or "neutral").strip().lower()

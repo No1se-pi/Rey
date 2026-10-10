@@ -1,0 +1,4 @@
+# Install in the same env, on the machine that runs synthesis.
+# This dependency installs PyTorch and model/runtime dependencies.
+qwen-tts==0.1.1
+soundfile

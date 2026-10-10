@@ -3,8 +3,14 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 data/*.sqlite3
 data/*.sqlite3-*
+data/*.session
+data/*.session-journal
+data/voice_output/
+data/model_cache/
+data/rey_bot.session*
 .env/

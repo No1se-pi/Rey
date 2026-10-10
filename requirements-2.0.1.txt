@@ -1,0 +1,5 @@
+-r requirements.txt
+telethon>=1.45,<2
+faster-whisper>=1.2,<2
+sounddevice>=0.5,<1
+scipy>=1.15,<2

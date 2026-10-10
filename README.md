@@ -151,3 +151,14 @@ pytest
 - web UI;
 - замена TTS на Piper, XTTS, Kokoro или Orpheus;
 - LLM-based классификация безопасности и памяти.
+
+## Rey 2.0.1 — Voice & Telegram
+
+Новый голосовой CLI и приватный Telegram-бот находятся в `app/v201/` и используют то же диалоговое ядро, личность и SQLite-память. Полная инструкция по установке, Qwen3-TTS, FFmpeg, Telegram, диагностике и smoke-тестам: [docs/REY-2.0.1.md](docs/REY-2.0.1.md).
+
+Быстрый запуск после настройки `.env`:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.v201 cli
+.\.venv\Scripts\python.exe -m app.v201 telegram
+```

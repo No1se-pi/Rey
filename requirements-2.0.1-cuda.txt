@@ -1,0 +1,4 @@
+# Install after requirements-2.0.1-tts.txt on the tested Windows RTX 3060 host.
+--index-url https://download.pytorch.org/whl/cu130
+torch==2.11.0+cu130
+torchaudio==2.11.0+cu130
