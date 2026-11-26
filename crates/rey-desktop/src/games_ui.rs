@@ -1,7 +1,8 @@
-use crate::{show_messages, theme::*};
+use crate::{avatar_ui::AvatarArt, show_messages, theme::*};
 use eframe::egui::{self, Align, Color32, Layout, Pos2, Rect, RichText, Stroke, Vec2};
 use egui_commonmark::CommonMarkCache;
 use rey_core::{
+    avatar::AvatarController,
     games::{Game, Kind, LegalMove, Origin, PieceView, Side},
     memory::{GameRecord, Message},
 };
@@ -42,6 +43,23 @@ pub(crate) enum GameAction {
     Retry,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum RoomTab {
+    #[default]
+    Moves,
+    Chat,
+    Controls,
+}
+
+pub(crate) struct RoomView<'a> {
+    pub controller: &'a AvatarController,
+    pub avatar: &'a mut AvatarArt,
+    pub engine_busy: bool,
+    pub chat_busy: bool,
+    pub chat_text: Option<&'a str>,
+    pub chat_phase: Option<&'a str>,
+}
+
 pub(crate) struct GameRoom {
     pub kind: Kind,
     pub mode: Mode,
@@ -65,7 +83,10 @@ pub(crate) struct GameRoom {
     pub engine_note: Option<String>,
     selection: Option<Origin>,
     choices: Vec<LegalMove>,
-    confirm: Option<&'static str>,
+    confirm_resign: bool,
+    setup_open: bool,
+    tab: RoomTab,
+    flipped: bool,
 }
 
 impl Default for GameRoom {
@@ -96,7 +117,10 @@ impl Default for GameRoom {
             engine_note: None,
             selection: None,
             choices: Vec::new(),
-            confirm: None,
+            confirm_resign: false,
+            setup_open: false,
+            tab: RoomTab::Moves,
+            flipped: false,
         }
     }
 }
@@ -123,7 +147,10 @@ impl GameRoom {
         }?;
         self.selection = None;
         self.choices.clear();
-        self.confirm = None;
+        self.confirm_resign = false;
+        self.setup_open = false;
+        self.tab = RoomTab::Moves;
+        self.flipped = false;
         self.game = Some(game);
         self.messages.clear();
         self.draft.clear();
@@ -135,6 +162,10 @@ impl GameRoom {
         self.hint = None;
         self.engine_note = None;
         Ok(())
+    }
+
+    pub fn show_board(&mut self) {
+        self.tab = RoomTab::Moves;
     }
 
     pub fn moved(&mut self) {
@@ -149,82 +180,20 @@ impl GameRoom {
         &mut self,
         ui: &mut egui::Ui,
         cache: &mut CommonMarkCache,
-        engine: bool,
-        chat_busy: bool,
-        game_pending: Option<&str>,
+        view: &mut RoomView<'_>,
     ) -> Option<GameAction> {
         let mut action = None;
+        let kind = self.game.as_ref().map(|game| game.kind);
         ui.horizontal(|ui| {
-            ui.heading("Игры");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(primary("Начать партию")).clicked() {
-                    if self.game.as_ref().is_some_and(|game| {
-                        game.outcome.is_none() && !game.moves.is_empty() && !game.study
-                    }) {
-                        self.confirm = Some("new");
-                    } else {
-                        action = Some(GameAction::New);
+            ui.heading(kind.map_or("Игры", Kind::name));
+            if kind.is_some() {
+                ui.label(RichText::new(self.active_mode.title()).color(MUTED));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(primary("Новая партия")).clicked() {
+                        self.setup_open = true;
                     }
-                }
-            });
-        });
-        ui.horizontal_wrapped(|ui| {
-            for kind in [Kind::Chess, Kind::Shogi] {
-                if ui
-                    .selectable_value(&mut self.kind, kind, kind.name())
-                    .clicked()
-                {
-                    self.position.clear();
-                }
+                });
             }
-            egui::ComboBox::from_id_salt("mode")
-                .selected_text(self.mode.title())
-                .show_ui(ui, |ui| {
-                    for mode in [Mode::Quiet, Mode::Companion, Mode::Mentor, Mode::Analysis] {
-                        ui.selectable_value(&mut self.mode, mode, mode.title());
-                    }
-                });
-            egui::ComboBox::from_id_salt("side")
-                .selected_text(self.user.label(self.kind))
-                .show_ui(ui, |ui| {
-                    for side in [Side::First, Side::Second] {
-                        ui.selectable_value(&mut self.user, side, side.label(self.kind));
-                    }
-                });
-        });
-        ui.collapsing("Настройки новой партии", |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.add(
-                    egui::DragValue::new(&mut self.minutes)
-                        .range(1..=120)
-                        .suffix(" мин"),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut self.depth)
-                        .range(1..=22)
-                        .prefix("Глубина "),
-                );
-                if ui.button("Импорт из файла").clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Партия", &["pgn", "fen", "sfen", "usi", "txt"])
-                        .pick_file()
-                {
-                    match read_position(path) {
-                        Ok(value) => self.position = value,
-                        Err(error) => self.engine_note = Some(error.to_string()),
-                    }
-                }
-            });
-            ui.add(
-                egui::TextEdit::multiline(&mut self.position)
-                    .desired_rows(2)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(if self.kind == Kind::Chess {
-                        "Начальная позиция · FEN или PGN"
-                    } else {
-                        "Начальная позиция · SFEN или USI"
-                    }),
-            );
         });
         if let Some(error) = &self.engine_note {
             ui.horizontal_wrapped(|ui| {
@@ -238,67 +207,110 @@ impl GameRoom {
             });
         }
         if let Some(error) = &self.save_error {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.colored_label(ERROR, format!("Партия не сохранена: {error}"));
                 if ui.button("Повторить").clicked() {
                     action = Some(GameAction::Retry);
                 }
             });
         }
-        if self.game.is_none() {
-            card(SIDE).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                ui.vertical_centered(|ui| {
-                    ui.add_space(34.0);
-                    ui.label(RichText::new("♘").color(ACCENT).size(45.0));
-                    ui.heading("Сыграем партию?");
-                    ui.label(RichText::new("Выбери игру, сторону и режим.").color(MUTED));
-                    ui.add_space(34.0);
-                });
+        let Some(game) = &self.game else {
+            card(PANEL).show(ui, |ui| {
+                ui.set_min_width(ui.available_width().min(480.0));
+                ui.label(RichText::new("Новая партия").strong().size(18.0));
+                self.setup_form(ui);
+                if ui.add(primary("Начать партию")).clicked() {
+                    action = Some(GameAction::New);
+                }
             });
             self.history(ui);
             return action;
-        }
-        let game = self.game.as_ref().expect("game present");
-        let moving = game.outcome.is_none() && (game.study || game.side() == game.user);
-        let legal = if moving { game.legal() } else { Vec::new() };
-        if let Some(outcome) = &game.outcome {
-            let result = match outcome.winner {
-                Some(side) => format!("{} · {}", side.label(game.kind), outcome.reason),
-                None => format!("Ничья · {}", outcome.reason),
-            };
-            ui.colored_label(MINT, result);
-        }
-        if game.kind == Kind::Shogi {
-            ui.checkbox(&mut self.simple, "Латинские обозначения");
-        }
+        };
+        let legal = if game.outcome.is_none() && (game.study || game.side() == game.user) {
+            game.legal()
+        } else {
+            Vec::new()
+        };
         let space = ui.available_width();
-        let wide = space >= 615.0;
-        let board_width = (if wide { space * 0.64 } else { space }).clamp(240.0, 490.0);
-        if wide {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(board_width);
-                    if let Some(clicked) = self.board_panel(ui, board_width, &legal) {
-                        action = Some(clicked);
-                    }
-                });
-                ui.vertical(|ui| {
-                    ui.set_min_width((space - board_width - 10.0).max(120.0));
-                    if let Some(clicked) =
-                        self.game_details(ui, cache, engine, chat_busy, game_pending)
-                    {
-                        action = Some(clicked);
-                    }
+        let wide = space >= 680.0;
+        if !wide {
+            self.tabs(ui);
+        }
+        if wide || self.tab == RoomTab::Moves {
+            let screen = ui.ctx().screen_rect();
+            let max_board =
+                (screen.height() - if wide { 248.0 } else { 258.0 }).clamp(225.0, 620.0);
+            let side_min = if wide { 300.0 } else { 235.0 };
+            let board_width = (space * 0.6).min(space - side_min).min(max_board);
+            let remaining = space - board_width - 16.0;
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(board_width, 0.0),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            ui.set_width(board_width);
+                            if let Some(clicked) = self.board_panel(ui, board_width, &legal) {
+                                action = Some(clicked);
+                            }
+                            if wide && let Some(clicked) = self.board_actions(ui, view.engine_busy)
+                            {
+                                action = Some(clicked);
+                            }
+                        },
+                    );
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(remaining, 0.0),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            ui.set_width(remaining);
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            self.status_card(ui, view);
+                            if wide {
+                                self.tabs(ui);
+                                if let Some(clicked) = self.active_tab(ui, cache, view) {
+                                    action = Some(clicked);
+                                }
+                            } else {
+                                if let Some(clicked) = self.board_actions(ui, view.engine_busy) {
+                                    action = Some(clicked);
+                                }
+                                self.move_table(ui);
+                            }
+                        },
+                    );
                 });
             });
         } else {
-            if let Some(clicked) = self.board_panel(ui, board_width, &legal) {
+            self.status_card(ui, view);
+            if let Some(clicked) = self.active_tab(ui, cache, view) {
                 action = Some(clicked);
             }
-            if let Some(clicked) = self.game_details(ui, cache, engine, chat_busy, game_pending) {
-                action = Some(clicked);
-            }
+        }
+
+        if self.setup_open {
+            egui::Window::new("Новая партия")
+                .collapsible(false)
+                .resizable(false)
+                .default_width(440.0)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    if self.game.as_ref().is_some_and(|game| {
+                        game.outcome.is_none() && !game.moves.is_empty() && !game.study
+                    }) {
+                        ui.colored_label(MUTED, "Новая партия закроет текущую незавершённую игру.");
+                    }
+                    self.setup_form(ui);
+                    ui.horizontal(|ui| {
+                        if ui.add(primary("Начать партию")).clicked() {
+                            action = Some(GameAction::New);
+                        }
+                        if ui.button("Назад").clicked() {
+                            self.setup_open = false;
+                        }
+                    });
+                });
         }
         if !self.choices.is_empty() {
             egui::Window::new("Выбор превращения")
@@ -316,38 +328,281 @@ impl GameRoom {
                     }
                 });
         }
-        if let Some(confirm) = self.confirm {
-            egui::Window::new(if confirm == "new" {
-                "Начать новую партию?"
-            } else {
-                "Сдаться?"
-            })
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
-            .show(ui.ctx(), |ui| {
-                ui.label(if confirm == "new" {
-                    "Текущая незавершённая партия будет закрыта."
-                } else {
-                    "Победу получит соперник."
+        if self.confirm_resign {
+            egui::Window::new("Сдаться?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ui.ctx(), |ui| {
+                    ui.label("Победу получит соперник.");
+                    ui.horizontal(|ui| {
+                        if ui.add(primary("Подтвердить")).clicked() {
+                            action = Some(GameAction::Resign);
+                            self.confirm_resign = false;
+                        }
+                        if ui.button("Назад").clicked() {
+                            self.confirm_resign = false;
+                        }
+                    });
                 });
-                ui.horizontal(|ui| {
-                    if ui.add(primary("Подтвердить")).clicked() {
-                        action = Some(if confirm == "new" {
-                            GameAction::New
-                        } else {
-                            GameAction::Resign
-                        });
-                        self.confirm = None;
-                    }
-                    if ui.button("Назад").clicked() {
-                        self.confirm = None;
-                    }
-                });
-            });
         }
-        self.history(ui);
         action
+    }
+
+    fn setup_form(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            for kind in [Kind::Chess, Kind::Shogi] {
+                if ui
+                    .selectable_value(&mut self.kind, kind, kind.name())
+                    .clicked()
+                {
+                    self.position.clear();
+                }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Режим");
+            egui::ComboBox::from_id_salt("setup-mode")
+                .selected_text(self.mode.title())
+                .show_ui(ui, |ui| {
+                    for mode in [Mode::Quiet, Mode::Companion, Mode::Mentor, Mode::Analysis] {
+                        ui.selectable_value(&mut self.mode, mode, mode.title());
+                    }
+                });
+            ui.label("Сторона");
+            egui::ComboBox::from_id_salt("setup-side")
+                .selected_text(self.user.label(self.kind))
+                .show_ui(ui, |ui| {
+                    for side in [Side::First, Side::Second] {
+                        ui.selectable_value(&mut self.user, side, side.label(self.kind));
+                    }
+                });
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.add(
+                egui::DragValue::new(&mut self.minutes)
+                    .range(1..=120)
+                    .suffix(" мин"),
+            );
+            ui.add(
+                egui::DragValue::new(&mut self.depth)
+                    .range(1..=22)
+                    .prefix("Глубина "),
+            );
+        });
+        ui.collapsing("Импорт позиции", |ui| {
+            if ui.button("Открыть файл").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .add_filter("Партия", &["pgn", "fen", "sfen", "usi", "txt"])
+                    .pick_file()
+            {
+                match read_position(path) {
+                    Ok(value) => self.position = value,
+                    Err(error) => self.engine_note = Some(error.to_string()),
+                }
+            }
+            ui.add(
+                egui::TextEdit::multiline(&mut self.position)
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(if self.kind == Kind::Chess {
+                        "FEN или PGN"
+                    } else {
+                        "SFEN или USI"
+                    }),
+            );
+        });
+    }
+
+    fn board_actions(&mut self, ui: &mut egui::Ui, engine_busy: bool) -> Option<GameAction> {
+        let mut action = None;
+        let game = self.game.as_ref().expect("game present");
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Развернуть")
+                .on_hover_text("Развернуть доску")
+                .clicked()
+            {
+                self.flipped = !self.flipped;
+                self.selection = None;
+            }
+            if ui
+                .add_enabled(
+                    !engine_busy && (game.outcome.is_none() || !game.moves.is_empty()),
+                    egui::Button::new("Подсказка"),
+                )
+                .clicked()
+            {
+                action = Some(GameAction::Hint);
+            }
+        });
+        action
+    }
+
+    fn status_card(&self, ui: &mut egui::Ui, view: &mut RoomView<'_>) {
+        let game = self.game.as_ref().expect("game present");
+        let screen = ui.ctx().screen_rect();
+        let compact =
+            ui.available_width() < 360.0 || screen.width() < 900.0 || screen.height() < 650.0;
+        let portrait_width = if compact { 65.0 } else { 118.0 };
+        card(SIDE).show(ui, |ui| {
+            let width = ui.available_width();
+            let status_width = (width - portrait_width - ui.spacing().item_spacing.x).max(100.0);
+            ui.set_min_width(width);
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    Vec2::new(status_width, 0.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.set_width(status_width);
+                        ui.add_space(4.0);
+                        let status = if self.request_failed {
+                            "Пауза".into()
+                        } else {
+                            game.turn_status()
+                        };
+                        ui.label(RichText::new(status).size(22.0).strong().color(MINT));
+                        if game.checked_king().is_some() && game.outcome.is_none() {
+                            ui.colored_label(ERROR, "Шах");
+                        }
+                        if view.engine_busy {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label("Движок анализирует позицию");
+                            });
+                        }
+                        if let Some(last) = game.labels.last() {
+                            let index = game.moves.len() - 1;
+                            ui.label(
+                                RichText::new(format!(
+                                    "Последний ход · {}. {last}",
+                                    game.move_number(index)
+                                ))
+                                .color(MUTED),
+                            );
+                        }
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    Vec2::new(portrait_width, 0.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.set_width(portrait_width);
+                        if compact {
+                            view.avatar.show_portrait(ui, view.controller, 62.0);
+                        } else {
+                            view.avatar.show(ui, view.controller, 118.0);
+                        }
+                    },
+                );
+            });
+        });
+    }
+
+    fn tabs(&mut self, ui: &mut egui::Ui) {
+        if let Some(hint) = &self.hint {
+            ui.colored_label(ACCENT, hint);
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (tab, label) in [
+                (RoomTab::Moves, "Ходы"),
+                (RoomTab::Chat, "Диалог с Рей"),
+                (RoomTab::Controls, "Партия"),
+            ] {
+                ui.selectable_value(&mut self.tab, tab, label);
+            }
+        });
+    }
+
+    fn active_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        cache: &mut CommonMarkCache,
+        view: &RoomView<'_>,
+    ) -> Option<GameAction> {
+        match self.tab {
+            RoomTab::Moves => {
+                self.move_table(ui);
+                None
+            }
+            RoomTab::Chat => self.game_chat(ui, cache, view),
+            RoomTab::Controls => self.game_controls(ui),
+        }
+    }
+
+    fn move_table(&self, ui: &mut egui::Ui) {
+        let game = self.game.as_ref().expect("game present");
+        card(SIDE).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let width = ((ui.available_width() - 62.0) * 0.5).max(50.0);
+            ui.horizontal(|ui| {
+                ui.add_sized(
+                    [36.0, 22.0],
+                    egui::Label::new(RichText::new("№").color(MUTED)),
+                );
+                for side in [Side::First, Side::Second] {
+                    ui.add_sized(
+                        [width, 22.0],
+                        egui::Label::new(RichText::new(side.label(game.kind)).color(MUTED)),
+                    );
+                }
+            });
+            ui.separator();
+            if game.moves.is_empty() {
+                ui.label(RichText::new("Ходов пока нет").color(MUTED));
+                return;
+            }
+            let mut rows: Vec<(u32, [Option<usize>; 2])> = Vec::new();
+            for index in 0..game.moves.len() {
+                let number = game.move_number(index);
+                if rows.last().is_none_or(|row| row.0 != number) {
+                    rows.push((number, [None; 2]));
+                }
+                rows.last_mut().expect("move row exists").1
+                    [usize::from(game.move_side(index) == Side::Second)] = Some(index);
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("move-table")
+                .max_height(240.0)
+                .stick_to_bottom(true)
+                .show_rows(ui, 27.0, rows.len(), |ui, range| {
+                    for &(number, slots) in &rows[range] {
+                        ui.horizontal(|ui| {
+                            ui.add_sized(
+                                [36.0, 27.0],
+                                egui::Label::new(
+                                    RichText::new(number.to_string()).color(MUTED).monospace(),
+                                ),
+                            );
+                            for (column, slot) in slots.into_iter().enumerate() {
+                                let label = slot.map_or("·", |index| game.labels[index].as_str());
+                                let color = match slot {
+                                    Some(index) if index + 1 == game.moves.len() => ACCENT,
+                                    Some(_) => TEXT,
+                                    None => MUTED,
+                                };
+                                let element = ui.add_sized(
+                                    [width, 27.0],
+                                    egui::Label::new(RichText::new(label).color(color).monospace())
+                                        .selectable(true),
+                                );
+                                if let Some(index) = slot {
+                                    let side = if column == 0 {
+                                        Side::First
+                                    } else {
+                                        Side::Second
+                                    };
+                                    element.on_hover_text(format!(
+                                        "{} · {}",
+                                        side.label(game.kind),
+                                        game.moves[index]
+                                    ));
+                                }
+                            }
+                        });
+                    }
+                });
+        });
     }
 
     fn history(&mut self, ui: &mut egui::Ui) {
@@ -396,8 +651,12 @@ impl GameRoom {
     ) -> Option<GameAction> {
         let game = self.game.as_ref().expect("game present");
         let size = game.kind.width();
-        let upper = game.user.other();
-        let lower = game.user;
+        let lower = if self.flipped {
+            game.user.other()
+        } else {
+            game.user
+        };
+        let upper = lower.other();
         hand(ui, game, upper, self.simple, legal, &mut self.selection);
         let (rect, _) = ui.allocate_exact_size(Vec2::splat(width), egui::Sense::hover());
         let painter = ui.painter_at(rect);
@@ -408,7 +667,7 @@ impl GameRoom {
         let mut started = None;
         let mut drag_released = false;
         for displayed in 0..size * size {
-            let index = if game.user == Side::Second {
+            let index = if lower == Side::Second {
                 size * size - 1 - displayed
             } else {
                 displayed
@@ -468,7 +727,7 @@ impl GameRoom {
                     game.kind,
                     piece,
                     self.simple,
-                    piece.side != game.user,
+                    piece.side != lower,
                 );
             }
             if legal
@@ -534,7 +793,7 @@ impl GameRoom {
             let col = (((pointer.x - rect.left()) / cell) as usize).min(size - 1);
             let row = (((pointer.y - rect.top()) / cell) as usize).min(size - 1);
             let displayed = row * size + col;
-            picked = Some(if game.user == Side::Second {
+            picked = Some(if lower == Side::Second {
                 size * size - 1 - displayed
             } else {
                 displayed
@@ -563,26 +822,10 @@ impl GameRoom {
         None
     }
 
-    fn game_details(
-        &mut self,
-        ui: &mut egui::Ui,
-        cache: &mut CommonMarkCache,
-        engine: bool,
-        chat_busy: bool,
-        pending: Option<&str>,
-    ) -> Option<GameAction> {
+    fn game_controls(&mut self, ui: &mut egui::Ui) -> Option<GameAction> {
         let game = self.game.as_ref().expect("game present");
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    !engine && (game.outcome.is_none() || !game.moves.is_empty()),
-                    egui::Button::new("Подсказка"),
-                )
-                .clicked()
-            {
-                action = Some(GameAction::Hint);
-            }
             if ui
                 .button(if game.kind == Kind::Chess {
                     "PGN"
@@ -622,7 +865,7 @@ impl GameRoom {
         if game.outcome.is_none() {
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Сдаться").clicked() {
-                    self.confirm = Some("resign");
+                    self.confirm_resign = true;
                 }
                 if game.kind == Kind::Chess
                     && game.study
@@ -674,77 +917,92 @@ impl GameRoom {
                 }
             });
         }
-        if engine {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Движок рассчитывает позицию");
-            });
+        if game.kind == Kind::Shogi {
+            ui.checkbox(&mut self.simple, "Латинские обозначения");
         }
-        if let Some(hint) = &self.hint {
-            ui.colored_label(ACCENT, hint);
-        }
-        ui.collapsing("Ходы", |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("moves")
-                .max_height(100.0)
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    ui.label(game.labels.join("  "));
-                });
-        });
-        ui.label(RichText::new("Обсудить партию").strong());
+        self.history(ui);
+        action
+    }
+
+    fn game_chat(
+        &mut self,
+        ui: &mut egui::Ui,
+        cache: &mut CommonMarkCache,
+        view: &RoomView<'_>,
+    ) -> Option<GameAction> {
+        let game = self.game.as_ref().expect("game present");
+        let mut action = None;
+        ui.label(
+            RichText::new("Рей видит позицию и ходы этой партии")
+                .color(MINT)
+                .small(),
+        );
+        let phase_height = if view.chat_phase.is_some() { 40.0 } else { 0.0 };
+        let chat_height =
+            (ui.ctx().screen_rect().bottom() - ui.cursor().top() - 132.0 - phase_height)
+                .clamp(48.0, 210.0);
         card(SIDE).show(ui, |ui| {
-            ui.set_min_width((ui.available_width() - 1.0).max(0.0));
+            ui.set_min_width(ui.available_width());
             egui::ScrollArea::vertical()
-                .id_salt("game-chat")
-                .max_height(220.0)
-                .min_scrolled_height(90.0)
+                .id_salt(("game-chat", game.id))
+                .max_height(chat_height)
+                .min_scrolled_height(0.0)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    if self.messages.is_empty() && pending.is_none() {
-                        ui.label(RichText::new("Спроси Рей о ходе или позиции.").color(MUTED));
+                    if self.messages.is_empty() && view.chat_text.is_none() {
+                        ui.label(
+                            RichText::new("Спроси о последнем ходе или попроси разобрать позицию.")
+                                .color(MUTED),
+                        );
                     } else {
-                        show_messages(ui, &self.messages, pending, cache);
+                        show_messages(ui, &self.messages, view.chat_text, cache);
                     }
                 });
         });
+        if let Some(phase) = view.chat_phase {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(phase);
+            });
+        }
         ui.horizontal(|ui| {
-            let input = ui.add_enabled(
-                !chat_busy,
+            let field = ui.add_enabled(
+                !view.chat_busy,
                 egui::TextEdit::singleline(&mut self.draft)
                     .char_limit(4000)
-                    .desired_width((ui.available_width() - 105.0).max(70.0))
-                    .hint_text("Сообщение Рей…"),
+                    .desired_width((ui.available_width() - 110.0).max(70.0))
+                    .hint_text("Вопрос о партии…"),
             );
-            let enter = input.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if !chat_busy
-                && (ui.add(primary("Спросить")).clicked() || enter)
-                && !self.draft.trim().is_empty()
-            {
-                action = Some(GameAction::Ask(std::mem::take(&mut self.draft)));
-            }
-            if pending.is_some() && ui.button("Стоп").clicked() {
-                action = Some(GameAction::CancelChat);
+            let enter = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if view.chat_phase.is_some() {
+                if ui.button("Стоп").clicked() {
+                    action = Some(GameAction::CancelChat);
+                }
+            } else {
+                let enabled = !view.chat_busy && !self.draft.trim().is_empty();
+                if (ui.add_enabled(enabled, primary("Спросить")).clicked() || enter) && enabled
+                {
+                    action = Some(GameAction::Ask(std::mem::take(&mut self.draft)));
+                    field.request_focus();
+                }
             }
         });
-        if !chat_busy
-            && ui
-                .button(if game.outcome.is_some() {
-                    "Разобрать партию"
-                } else {
-                    "Объяснить позицию"
-                })
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(!view.chat_busy, egui::Button::new("Последние ходы"))
                 .clicked()
-        {
-            action = Some(GameAction::Ask(
-                if game.outcome.is_some() {
-                    "Разбери эту партию и объясни критические решения."
-                } else {
-                    "Объясни позицию, проверенные угрозы и доступные варианты."
-                }
-                .into(),
-            ));
-        }
+            {
+                action = Some(GameAction::Ask("Покажи последние ходы".into()));
+            }
+            if ui
+                .add_enabled(!view.chat_busy, egui::Button::new("Разобрать позицию"))
+                .clicked()
+            {
+                action = Some(GameAction::Ask(
+                    "Объясни текущую позицию и прокомментируй последний ход.".into(),
+                ));
+            }
+        });
         action
     }
 }
@@ -765,18 +1023,46 @@ fn hand(
     legal: &[LegalMove],
     selected: &mut Option<Origin>,
 ) {
+    let on_move = game.outcome.is_none() && game.side() == side;
+    let name = if game.study {
+        side.label(game.kind)
+    } else if side == game.user {
+        "Ты"
+    } else {
+        "Рей"
+    };
+    egui::Frame::new()
+        .fill(if on_move { RAISED } else { SIDE })
+        .corner_radius(9)
+        .inner_margin(egui::Margin::symmetric(11, 5))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(name)
+                        .strong()
+                        .color(if on_move { MINT } else { TEXT }),
+                );
+                if !game.study {
+                    ui.label(RichText::new(side.label(game.kind)).color(MUTED));
+                }
+                if !game.study {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(
+                            RichText::new(clock(game.clock(side)))
+                                .monospace()
+                                .size(19.0)
+                                .color(if on_move { MINT } else { TEXT }),
+                        );
+                    });
+                }
+            });
+        });
+    let items = game.hand(side);
+    if items.is_empty() {
+        return;
+    }
     ui.horizontal_wrapped(|ui| {
-        let on_move = game.outcome.is_none() && game.side() == side;
-        ui.label(
-            RichText::new(format!(
-                "{}  {}",
-                side.label(game.kind),
-                clock(game.clock(side))
-            ))
-            .strong()
-            .color(if on_move { MINT } else { TEXT }),
-        );
-        for (letter, piece, count) in game.hand(side) {
+        for (letter, piece, count) in items {
             let origin = Origin::Hand(letter);
             if ui
                 .add_enabled(

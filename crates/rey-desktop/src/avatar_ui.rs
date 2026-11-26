@@ -142,6 +142,20 @@ impl AvatarArt {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui, controller: &AvatarController, height: f32) {
+        self.draw(ui, controller, height, true);
+    }
+
+    pub fn show_portrait(&mut self, ui: &mut egui::Ui, controller: &AvatarController, height: f32) {
+        self.draw(ui, controller, height, false);
+    }
+
+    fn draw(
+        &mut self,
+        ui: &mut egui::Ui,
+        controller: &AvatarController,
+        height: f32,
+        show_status: bool,
+    ) {
         while let Ok((path, image)) = self.completed.try_recv() {
             let texture = match image {
                 Ok(image) => Texture::Loaded(ui.ctx().load_texture(
@@ -241,11 +255,13 @@ impl AvatarArt {
                 ACCENT,
             );
         }
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.colored_label(if state == State::Error { ERROR } else { MINT }, "●");
-            ui.label(RichText::new(state.label()).color(TEXT).strong());
-        });
+        if show_status {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.colored_label(if state == State::Error { ERROR } else { MINT }, "●");
+                ui.label(RichText::new(state.label()).color(TEXT).strong());
+            });
+        }
         let transition = match state {
             State::Idle => Some(Duration::from_secs(180).saturating_sub(time)),
             State::Happy

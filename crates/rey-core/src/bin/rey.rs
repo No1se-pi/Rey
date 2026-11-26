@@ -162,6 +162,7 @@ async fn chat(agent: Agent, session: String, model: Option<String>, spoken: bool
                     text,
                     spoken,
                     game_context: None,
+                    game_chat: false,
                 };
                 let result = tokio::select! {
                     answer = agent.reply(provider.as_ref(),turn) => answer,
@@ -176,6 +177,7 @@ async fn chat(agent: Agent, session: String, model: Option<String>, spoken: bool
                                 text,
                                 spoken,
                                 game_context: None,
+                                game_chat: false,
                             },
                             &reply,
                         )?;

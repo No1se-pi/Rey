@@ -1,4 +1,6 @@
 mod chess;
+mod dialogue;
+pub use dialogue::GameSnapshot;
 pub mod engine;
 mod shogi;
 
@@ -378,28 +380,6 @@ impl Game {
             .take_while(|movement| position.play(movement).is_ok())
             .cloned()
             .collect()
-    }
-
-    pub fn context(&self) -> String {
-        let legal = self
-            .legal()
-            .into_iter()
-            .map(|m| m.notation)
-            .collect::<Vec<_>>();
-        format!(
-            "Игра: {}. Позиция: {}. Ходят: {}. Пользователь: {}. Ходы: {}. Легальные ходы: {}. Шах: {}. Результат: {}. {}",
-            self.kind.name(),
-            self.position(),
-            self.side().label(self.kind),
-            self.user.label(self.kind),
-            self.moves.join(" "),
-            legal.join(" "),
-            self.checked_king().is_some(),
-            self.result_code(),
-            self.analysis
-                .as_deref()
-                .unwrap_or("Оценка движка недоступна.")
-        )
     }
 
     pub fn record(&self) -> Option<GameRecord> {

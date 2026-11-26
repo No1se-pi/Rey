@@ -12,7 +12,7 @@ use rey_core::{
     agent::{Agent, Reply, Turn},
     avatar::{AvatarController, State},
     config::{Config, ProviderKind, endpoint, is_local},
-    games::{Kind, engine},
+    games::{GameSnapshot, Kind, engine},
     memory::{Message, Note, Session, copy_database},
     voice::Voice,
 };
@@ -27,7 +27,7 @@ use uuid::Uuid;
 use crate::{
     audio::{Capture, Pcm, Playback},
     avatar_ui::AvatarArt,
-    games_ui::{GameAction, GameRoom},
+    games_ui::{GameAction, GameRoom, RoomView},
     theme::*,
 };
 
@@ -327,11 +327,11 @@ impl Desktop {
         if matches!(input, Input::Text(_)) && initial.is_empty() {
             return;
         }
-        let game_context = if channel == Channel::Game {
-            self.game.game.as_ref().map(|game| game.context())
-        } else {
-            None
-        };
+        let game_context = self.game.game.as_ref().and_then(|game| {
+            (channel == Channel::Game
+                || !matches!(&input, Input::Text(text) if !GameSnapshot::concerns_game(text)))
+            .then(|| game.snapshot())
+        });
         let session = if channel == Channel::Game {
             self.game.chat_id.clone()
         } else {
@@ -348,6 +348,7 @@ impl Desktop {
             input,
             session,
             game_context,
+            game_chat: channel == Channel::Game,
             model: self.model.clone(),
             spoken: self.voice_enabled && !quiet,
             agent: self.agent.clone(),
@@ -698,6 +699,16 @@ impl Desktop {
                     });
                 if selection != self.session {
                     self.select_chat(selection);
+                }
+            });
+        }
+        if let Some(game) = &self.game.game {
+            let status = format!("{} · {}", game.kind.name(), game.turn_status());
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(status).color(MINT));
+                if ui.button("К доске").clicked() {
+                    self.game.show_board();
+                    self.page(Page::Games);
                 }
             });
         }
@@ -1172,16 +1183,19 @@ impl Desktop {
         let pending = self
             .pending
             .as_ref()
-            .filter(|pending| pending.channel == Channel::Game && pending.emotion.is_none())
-            .map(|pending| pending.input.as_str());
-        let busy = self.pending.is_some() || self.recording.is_some();
-        if let Some(action) = self.game.show(
-            ui,
-            &mut self.markdown,
-            self.engine_job.is_some(),
-            busy,
-            pending,
-        ) && let Err(error) = self.game_action(action)
+            .filter(|pending| pending.channel == Channel::Game);
+        let mut view = RoomView {
+            controller: &self.avatar,
+            avatar: &mut self.art,
+            engine_busy: self.engine_job.is_some(),
+            chat_busy: self.pending.is_some() || self.recording.is_some(),
+            chat_text: pending
+                .filter(|pending| pending.emotion.is_none())
+                .map(|pending| pending.input.as_str()),
+            chat_phase: pending.map(|pending| pending.phase.label()),
+        };
+        if let Some(action) = self.game.show(ui, &mut self.markdown, &mut view)
+            && let Err(error) = self.game_action(action)
         {
             self.error(error);
         }
@@ -1538,7 +1552,7 @@ impl eframe::App for Desktop {
                 .frame(egui::Frame::new().fill(SIDE).inner_margin(14))
                 .show(ctx, |ui| self.sidebar(ui));
         }
-        if matches!(self.page, Page::Chat | Page::Games) {
+        if self.page == Page::Chat {
             let avatar_width = if compact {
                 (width * 0.25).clamp(155.0, 218.0)
             } else if width < 1130.0 {
@@ -1647,7 +1661,8 @@ struct VoiceRequest {
     id: Uuid,
     input: Input,
     session: String,
-    game_context: Option<String>,
+    game_context: Option<GameSnapshot>,
+    game_chat: bool,
     model: String,
     spoken: bool,
     agent: Agent,
@@ -1677,15 +1692,26 @@ impl VoiceRequest {
             model: &self.model,
             text: &text,
             spoken: self.spoken,
-            game_context: self.game_context.as_deref(),
+            game_context: self
+                .game_context
+                .as_ref()
+                .filter(|_| self.game_chat || GameSnapshot::concerns_game(&text)),
+            game_chat: self.game_chat,
         };
-        let provider = self.agent.provider()?;
-        let reply = self.agent.reply(provider.as_ref(), turn()).await?;
+        let (reply, provider) = if let Some(reply) = Agent::answer_game_facts(&turn()) {
+            (reply, None)
+        } else {
+            let provider = self.agent.provider()?;
+            let reply = self.agent.reply(provider.as_ref(), turn()).await?;
+            (reply, Some(provider))
+        };
         self.agent.save_reply(&turn(), &reply)?;
         self.emit(Event::Reply(self.id, text, reply.clone()));
         if self.spoken {
             self.emit(Event::Phase(self.id, Phase::Synthesizing));
-            if self.agent.config.unload_ollama {
+            if self.agent.config.unload_ollama
+                && let Some(provider) = provider
+            {
                 let _ = provider.unload(&self.model).await;
             }
             let audio = self.voice.synthesize(&reply.text).await?;
