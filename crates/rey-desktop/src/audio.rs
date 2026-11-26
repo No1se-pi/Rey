@@ -1,5 +1,4 @@
 use anyhow::{Result, anyhow, ensure};
-use miniaudio::{Backend, Context, Device, DeviceConfig, DeviceType, Format};
 use std::{
     path::Path,
     sync::{
@@ -9,47 +8,35 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "linux")]
+#[path = "audio/linux.rs"]
+mod platform;
+#[cfg(target_os = "windows")]
+#[path = "audio/windows.rs"]
+mod platform;
+
 const RATE: u32 = 16_000;
 pub struct Capture {
-    device: Device,
+    device: platform::Stream,
     samples: Arc<Mutex<Vec<i16>>>,
     started: Instant,
     pub max_seconds: u32,
 }
 
-fn device(config: &DeviceConfig) -> Result<Device> {
-    #[cfg(target_os = "linux")]
-    let backends = [Backend::PulseAudio, Backend::Alsa];
-    #[cfg(target_os = "windows")]
-    let backends = [Backend::Wasapi, Backend::DSound, Backend::WinMM];
-    let context =
-        Context::new(&backends, None).map_err(|e| anyhow!("Аудиосистема недоступна: {e:?}"))?;
-    Device::new(Some(context), config).map_err(|e| anyhow!("Аудиоустройство недоступно: {e:?}"))
-}
-
 impl Capture {
     pub fn start(max_seconds: u32, max_bytes: u64) -> Result<Self> {
-        let mut config = DeviceConfig::new(DeviceType::Capture);
-        config.set_sample_rate(RATE);
-        config.capture_mut().set_format(Format::S16);
-        config.capture_mut().set_channels(1);
         let max_samples =
             ((max_bytes.saturating_sub(44) / 2) as usize).min(max_seconds as usize * RATE as usize);
         let max_seconds = max_seconds.min((max_samples / RATE as usize).max(1) as u32);
         let samples = Arc::new(Mutex::new(Vec::with_capacity(max_samples)));
         let buffer = samples.clone();
-        config.set_data_callback(move |_, _, input| {
+        let device = platform::capture(RATE, move |input| {
             let Ok(mut buffer) = buffer.try_lock() else {
                 return;
             };
-            let input = input.as_samples::<i16>();
             let count = input.len().min(max_samples.saturating_sub(buffer.len()));
             buffer.extend_from_slice(&input[..count]);
-        });
-        let device = device(&config)?;
-        device
-            .start()
-            .map_err(|e| anyhow!("Не удалось начать запись: {e:?}"))?;
+        })?;
         Ok(Self {
             device,
             samples,
@@ -63,9 +50,7 @@ impl Capture {
     }
 
     pub fn stop(self) -> Result<Vec<i16>> {
-        self.device
-            .stop()
-            .map_err(|e| anyhow!("Не удалось остановить запись: {e:?}"))?;
+        platform::stop(&self.device)?;
         let mut samples = self
             .samples
             .lock()
@@ -131,7 +116,7 @@ pub fn read_wav(path: &Path) -> Result<Pcm> {
 }
 
 pub struct Playback {
-    _device: Device,
+    _device: platform::Stream,
     done: Arc<AtomicBool>,
     amplitude: Arc<AtomicU32>,
     started: Instant,
@@ -140,10 +125,6 @@ pub struct Playback {
 
 impl Playback {
     pub fn start(pcm: Pcm) -> Result<Self> {
-        let mut config = DeviceConfig::new(DeviceType::Playback);
-        config.set_sample_rate(pcm.rate);
-        config.playback_mut().set_format(Format::F32);
-        config.playback_mut().set_channels(u32::from(pcm.channels));
         let done = Arc::new(AtomicBool::new(false));
         let amplitude = Arc::new(AtomicU32::new(0));
         let total = Duration::from_secs_f64(
@@ -151,16 +132,13 @@ impl Playback {
         );
         let signal = done.clone();
         let volume = amplitude.clone();
-        let samples: Arc<[f32]> = pcm.samples.into();
-        let mut index = 0;
+        let rate = pcm.rate;
+        let channels = pcm.channels;
+        let mut source = RenderSource { pcm, cursor: 0.0 };
         let mut drained = false;
         let mut envelope = 0.0_f32;
-        config.set_data_callback(move |_, output, _| {
-            let output = output.as_samples_mut::<f32>();
-            let count = output.len().min(samples.len().saturating_sub(index));
-            output[..count].copy_from_slice(&samples[index..index + count]);
-            output[count..].fill(0.0);
-            index += count;
+        let device = platform::playback(rate, channels, move |output, rate, channels| {
+            let count = source.render(output, rate, channels);
             let power = output.iter().map(|sample| sample * sample).sum::<f32>()
                 / output.len().max(1) as f32;
             let loudness = power.sqrt();
@@ -176,11 +154,7 @@ impl Playback {
                 }
                 drained = true;
             }
-        });
-        let device = device(&config)?;
-        device
-            .start()
-            .map_err(|e| anyhow!("Не удалось начать воспроизведение: {e:?}"))?;
+        })?;
         Ok(Self {
             _device: device,
             done,
@@ -199,9 +173,71 @@ impl Playback {
     }
 }
 
+struct RenderSource {
+    pcm: Pcm,
+    cursor: f64,
+}
+
+impl RenderSource {
+    fn render(&mut self, target: &mut [f32], rate: u32, channels: u16) -> usize {
+        let input_channels = usize::from(self.pcm.channels);
+        let output_channels = usize::from(channels);
+        let total_frames = self.pcm.samples.len() / input_channels;
+        let step = f64::from(self.pcm.rate) / f64::from(rate);
+        let mut frames = 0;
+        target.fill(0.0);
+
+        for frame in target.chunks_exact_mut(output_channels) {
+            let index = self.cursor as usize;
+            if index >= total_frames {
+                break;
+            }
+            let next = (index + 1).min(total_frames - 1);
+            let fraction = self.cursor.fract() as f32;
+            let first = &self.pcm.samples[index * input_channels..][..input_channels];
+            let second = &self.pcm.samples[next * input_channels..][..input_channels];
+            if output_channels == 1 && input_channels > 1 {
+                let average = |samples: &[f32]| samples.iter().sum::<f32>() / input_channels as f32;
+                let start = average(first);
+                frame[0] = start + (average(second) - start) * fraction;
+            } else {
+                for (channel, sample) in frame.iter_mut().enumerate() {
+                    let channel = channel.min(input_channels - 1);
+                    *sample = first[channel] + (second[channel] - first[channel]) * fraction;
+                }
+            }
+            self.cursor += step;
+            frames += 1;
+        }
+        frames
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn renders_mono_at_the_native_stereo_device_rate() {
+        let mut player = RenderSource {
+            pcm: Pcm {
+                samples: vec![0.0, 0.5, 1.0],
+                rate: 24000,
+                channels: 1,
+            },
+            cursor: 0.0,
+        };
+        let mut output = [0.0; 16];
+        assert_eq!(player.render(&mut output, 48000, 2), 6);
+        assert_eq!(
+            output,
+            [
+                0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0
+            ]
+        );
+        assert_eq!(player.render(&mut output, 48000, 2), 0);
+        assert_eq!(output, [0.0; 16]);
+    }
+
     #[test]
     fn mic_wav_round_trip() {
         let folder = tempfile::tempdir().unwrap();

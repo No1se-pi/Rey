@@ -14,6 +14,11 @@ egui_commonmark = { version = "0.21.1", default-features = false, features = ["p
 image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 hound = "3.5"
-miniaudio = { package = "om-fork-miniaudio", version = "0.12.2", default-features = false, features = ["ma-log-level-error"] }
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+miniaudio = { package = "om-fork-miniaudio", version = "0.12.2", default-features = false, features = ["ma-log-level-error"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+cpal = "0.15.3"
