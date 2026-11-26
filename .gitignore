@@ -14,3 +14,13 @@ data/voice_output/
 data/model_cache/
 data/rey_bot.session*
 .env/
+
+/target/
+/data/
+/ghost/memory.db*
+/ghost/*.sqlite*
+*.session
+*.session-journal
+/app/assets/*.zip
+*.safetensors
+*.gguf

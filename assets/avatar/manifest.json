@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "character_id": "rey",
+  "asset_pack_version": "1.1.0",
+  "default_state": "idle",
+  "states": {
+    "idle": {
+      "file": "idle.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "listening": {
+      "file": "listening.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "thinking": {
+      "file": "thinking.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "speaking": {
+      "file": "speaking.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "happy": {
+      "file": "happy.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "sad": {
+      "file": "sad.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "confused": {
+      "file": "confused.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "surprised": {
+      "file": "surprised.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "annoyed": {
+      "file": "annoyed.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "sleeping": {
+      "file": "sleeping.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    },
+    "error": {
+      "file": "error.png",
+      "type": "static",
+      "anchor": "bottom_center"
+    }
+  },
+  "fallback_state": "idle",
+  "variants": {
+    "portrait": "portrait.png",
+    "three_quarter": "three_quarter.png",
+    "full_body": "full_body.png",
+    "mini": {
+      "32": "mini_32.png",
+      "64": "mini_64.png",
+      "128": "mini_128.png",
+      "256": "mini_256.png",
+      "512": "mini_512.png"
+    }
+  },
+  "planned_states": [],
+  "files": {
+    "annoyed.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "blink_closed.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "blink_half.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/annoyed.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/confused.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/error.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/happy.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/listening.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/sad.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/sleeping.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/surprised.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "bust/thinking.png": {
+      "width": 420,
+      "height": 416,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "confused.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "error.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "full_body.png": {
+      "width": 1024,
+      "height": 1536,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "happy.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "idle.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "listening.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "mini_128.png": {
+      "width": 128,
+      "height": 128,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "mini_256.png": {
+      "width": 256,
+      "height": 256,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "mini_32.png": {
+      "width": 32,
+      "height": 32,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "mini_512.png": {
+      "width": 512,
+      "height": 512,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "mini_64.png": {
+      "width": 64,
+      "height": 64,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "portrait.png": {
+      "width": 1024,
+      "height": 1024,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "portrait_original.png": {
+      "width": 1278,
+      "height": 1230,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "sad.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "sleeping.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "speaking.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "speech_closed.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "speech_round.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "speech_small.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "speech_soft.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "surprised.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "thinking.png": {
+      "width": 1122,
+      "height": 1402,
+      "format": "png",
+      "mode": "RGBA"
+    },
+    "three_quarter.png": {
+      "width": 1086,
+      "height": 1448,
+      "format": "png",
+      "mode": "RGBA"
+    }
+  },
+  "animations": {
+    "blink": {
+      "type": "sequence",
+      "loop": false,
+      "frames": [
+        {
+          "file": "idle.png",
+          "duration_ms": 55
+        },
+        {
+          "file": "blink_half.png",
+          "duration_ms": 55
+        },
+        {
+          "file": "blink_closed.png",
+          "duration_ms": 80
+        },
+        {
+          "file": "blink_half.png",
+          "duration_ms": 55
+        },
+        {
+          "file": "idle.png",
+          "duration_ms": 55
+        }
+      ],
+      "suggested_interval_ms": [
+        3000,
+        7000
+      ],
+      "allowed_states": [
+        "idle",
+        "listening"
+      ]
+    },
+    "speech": {
+      "type": "audio_envelope",
+      "silence": "speech_closed.png",
+      "frames": {
+        "closed": "speech_closed.png",
+        "small": "speech_small.png",
+        "soft": "speech_soft.png",
+        "round": "speech_round.png"
+      },
+      "suggested_update_ms": 80,
+      "note": "Use amplitude to approximate opening; this is not phoneme-based lip sync."
+    }
+  },
+  "canvas": {
+    "width": 1122,
+    "height": 1402,
+    "alpha": "straight",
+    "anchor": "bottom_center"
+  }
+}
