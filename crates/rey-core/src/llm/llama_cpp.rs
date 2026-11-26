@@ -1,4 +1,7 @@
-use super::{Call, ChatMessage, Function, Provider, ToolCall, http_client};
+use super::{
+    Call, ChatMessage, Function, GAME_REPLY_TOKENS, OnText, Provider, StreamLine, ToolCall,
+    http_client, read_chat_stream,
+};
 use crate::config::{Config, api, is_local};
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::{Client, RequestBuilder, StatusCode, Url};
@@ -201,6 +204,59 @@ impl Provider for LlamaCpp {
         tools: &'a [Value],
     ) -> Call<'a, ChatMessage> {
         Box::pin(self.generate(model, messages, tools))
+    }
+
+    fn game_chat<'a>(
+        &'a self,
+        model: &'a str,
+        messages: &'a [ChatMessage],
+        on_text: &'a mut OnText<'_>,
+    ) -> Call<'a, ()> {
+        Box::pin(async move {
+            #[derive(Deserialize)]
+            struct Delta {
+                content: Option<String>,
+            }
+            #[derive(Deserialize)]
+            struct StreamChoice {
+                delta: Delta,
+            }
+            #[derive(Deserialize)]
+            struct Chunk {
+                choices: Vec<StreamChoice>,
+            }
+            let encoded: Vec<_> = messages.iter().map(encode_message).collect();
+            let response = self
+                .auth(self.client.post(api(&self.base, "v1/chat/completions")))
+                .json(&json!({
+                    "model": model, "messages": encoded, "stream": true,
+                    "max_tokens": GAME_REPLY_TOKENS, "temperature": 0.3,
+                    "chat_template_kwargs": {"enable_thinking": false}, "cache_prompt": true
+                }))
+                .send()
+                .await?;
+            read_chat_stream(
+                checked_status(response)?,
+                |line| {
+                    let line = std::str::from_utf8(line)?.trim_end();
+                    let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+                        return Ok(StreamLine::Skip);
+                    };
+                    if data == "[DONE]" {
+                        return Ok(StreamLine::Last(String::new()));
+                    }
+                    let chunk: Chunk = serde_json::from_str(data)?;
+                    Ok(chunk
+                        .choices
+                        .into_iter()
+                        .next()
+                        .and_then(|choice| choice.delta.content)
+                        .map_or(StreamLine::Skip, StreamLine::Text))
+                },
+                on_text,
+            )
+            .await
+        })
     }
 
     fn models(&self) -> Call<'_, Vec<String>> {

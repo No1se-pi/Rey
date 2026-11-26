@@ -58,6 +58,7 @@ pub(crate) struct RoomView<'a> {
     pub chat_busy: bool,
     pub chat_text: Option<&'a str>,
     pub chat_phase: Option<&'a str>,
+    pub chat_preview: &'a str,
 }
 
 pub(crate) struct GameRoom {
@@ -937,16 +938,15 @@ impl GameRoom {
                 .color(MINT)
                 .small(),
         );
-        let phase_height = if view.chat_phase.is_some() { 40.0 } else { 0.0 };
         let chat_height =
-            (ui.ctx().screen_rect().bottom() - ui.cursor().top() - 132.0 - phase_height)
-                .clamp(48.0, 210.0);
+            (ui.ctx().screen_rect().bottom() - ui.cursor().top() - 166.0).clamp(48.0, 210.0);
         card(SIDE).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             egui::ScrollArea::vertical()
                 .id_salt(("game-chat", game.id))
                 .max_height(chat_height)
-                .min_scrolled_height(0.0)
+                .min_scrolled_height(chat_height)
+                .auto_shrink([false, false])
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
                     if self.messages.is_empty() && view.chat_text.is_none() {
@@ -956,15 +956,10 @@ impl GameRoom {
                         );
                     } else {
                         show_messages(ui, &self.messages, view.chat_text, cache);
+                        super::show_reply_preview(ui, view.chat_preview);
                     }
                 });
         });
-        if let Some(phase) = view.chat_phase {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label(phase);
-            });
-        }
         ui.horizontal(|ui| {
             let field = ui.add_enabled(
                 !view.chat_busy,
@@ -974,17 +969,11 @@ impl GameRoom {
                     .hint_text("Вопрос о партии…"),
             );
             let enter = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if view.chat_phase.is_some() {
-                if ui.button("Стоп").clicked() {
-                    action = Some(GameAction::CancelChat);
-                }
-            } else {
-                let enabled = !view.chat_busy && !self.draft.trim().is_empty();
-                if (ui.add_enabled(enabled, primary("Спросить")).clicked() || enter) && enabled
-                {
-                    action = Some(GameAction::Ask(std::mem::take(&mut self.draft)));
-                    field.request_focus();
-                }
+            let enabled = !view.chat_busy && !self.draft.trim().is_empty();
+            if (ui.add_enabled(enabled, primary("Спросить")).clicked() || enter) && enabled
+            {
+                action = Some(GameAction::Ask(std::mem::take(&mut self.draft)));
+                field.request_focus();
             }
         });
         ui.horizontal_wrapped(|ui| {
@@ -998,11 +987,18 @@ impl GameRoom {
                 .add_enabled(!view.chat_busy, egui::Button::new("Разобрать позицию"))
                 .clicked()
             {
-                action = Some(GameAction::Ask(
-                    "Объясни текущую позицию и прокомментируй последний ход.".into(),
-                ));
+                action = Some(GameAction::Ask("Разбери текущую позицию".into()));
             }
         });
+        if let Some(phase) = view.chat_phase {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(phase);
+                if ui.button("Стоп").clicked() {
+                    action = Some(GameAction::CancelChat);
+                }
+            });
+        }
         action
     }
 }
@@ -1163,5 +1159,53 @@ fn draw_piece(
         );
     } else {
         painter.galley(pos, galley, color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_game_chat_paints_the_streamed_reply_inside_the_transcript() {
+        let ctx = egui::Context::default();
+        let empty_root = tempfile::tempdir().unwrap();
+        let controller = AvatarController::default();
+        let mut avatar = AvatarArt::load(empty_root.path(), &ctx);
+        let mut room = GameRoom::default();
+        room.new_game().unwrap();
+        room.tab = RoomTab::Chat;
+        let mut cache = CommonMarkCache::default();
+        let preview = "The e-pawn reaches e4.";
+        let mut view = RoomView {
+            controller: &controller,
+            avatar: &mut avatar,
+            engine_busy: false,
+            chat_busy: true,
+            chat_text: Some("Why e4?"),
+            chat_phase: Some("Generating"),
+            chat_preview: preview,
+        };
+        let mut frame = egui::FullOutput::default();
+        for _ in 0..2 {
+            frame = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1260.0, 790.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            room.show(ui, &mut cache, &mut view);
+                        });
+                    });
+                },
+            );
+        }
+        assert!(frame.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+                if text.galley.text() == preview
+                    && shape.clip_rect.contains(text.visual_bounding_rect().center()))
+        }));
     }
 }

@@ -160,6 +160,7 @@ enum Input {
 enum Event {
     Phase(Uuid, Phase),
     Transcript(Uuid, String),
+    ReplyFragment(Uuid, String),
     Reply(Uuid, String, Reply),
     Voice(Uuid, Pcm, Option<PathBuf>),
     Finished(Uuid),
@@ -176,6 +177,7 @@ struct Pending {
     phase: Phase,
     job: JoinHandle<()>,
     input: String,
+    preview: String,
     emotion: Option<String>,
     quiet: bool,
 }
@@ -317,6 +319,14 @@ impl Desktop {
     }
 
     fn start(&mut self, channel: Channel, input: Input, quiet: bool) {
+        if channel == Channel::Game
+            && !quiet
+            && self.pending.as_ref().is_some_and(|pending| {
+                pending.channel == Channel::Game && (pending.quiet || pending.emotion.is_some())
+            })
+        {
+            self.cancel(false);
+        }
         if self.pending.is_some() || self.recording.is_some() {
             return;
         }
@@ -372,6 +382,7 @@ impl Desktop {
             phase,
             job,
             input: initial,
+            preview: String::new(),
             emotion: None,
             quiet,
         });
@@ -451,6 +462,11 @@ impl Desktop {
                         pending.input = text;
                     }
                 }
+                Event::ReplyFragment(id, fragment) if self.active(id) => {
+                    if let Some(pending) = &mut self.pending {
+                        pending.preview.push_str(&fragment);
+                    }
+                }
                 Event::Reply(id, text, reply) if self.active(id) => {
                     if let Some(pending) = &mut self.pending {
                         let messages = match pending.channel {
@@ -459,6 +475,7 @@ impl Desktop {
                         };
                         messages.push(Message::new("user", text));
                         messages.push(Message::new("assistant", reply.text));
+                        pending.preview.clear();
                         pending.emotion = Some(reply.emotion.clone());
                         self.avatar.reply(&reply.emotion);
                         self.needs_note_refresh = true;
@@ -716,10 +733,11 @@ impl Desktop {
         let pending = self
             .pending
             .as_ref()
-            .filter(|pending| pending.channel == Channel::Chat && pending.emotion.is_none())
+            .filter(|pending| pending.channel == Channel::Chat && pending.emotion.is_none());
+        let pending_text = pending
             .map(|pending| pending.input.as_str())
             .filter(|text| !text.is_empty());
-        let empty = self.messages.is_empty() && pending.is_none();
+        let empty = self.messages.is_empty() && pending_text.is_none();
         let message_height = (ui.available_height() - 115.0).max(90.0);
         card(SIDE).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -737,7 +755,10 @@ impl Desktop {
                             ui.label(RichText::new("О чём поговорим?").color(MUTED));
                         });
                     } else {
-                        show_messages(ui, &self.messages, pending, &mut self.markdown);
+                        show_messages(ui, &self.messages, pending_text, &mut self.markdown);
+                        if let Some(pending) = pending {
+                            show_reply_preview(ui, &pending.preview);
+                        }
                     }
                 });
         });
@@ -1188,11 +1209,16 @@ impl Desktop {
             controller: &self.avatar,
             avatar: &mut self.art,
             engine_busy: self.engine_job.is_some(),
-            chat_busy: self.pending.is_some() || self.recording.is_some(),
+            chat_busy: self.recording.is_some()
+                || self.pending.as_ref().is_some_and(|pending| {
+                    pending.channel != Channel::Game
+                        || (!pending.quiet && pending.emotion.is_none())
+                }),
             chat_text: pending
                 .filter(|pending| pending.emotion.is_none())
                 .map(|pending| pending.input.as_str()),
             chat_phase: pending.map(|pending| pending.phase.label()),
+            chat_preview: pending.map_or("", |pending| pending.preview.as_str()),
         };
         if let Some(action) = self.game.show(ui, &mut self.markdown, &mut view)
             && let Err(error) = self.game_action(action)
@@ -1615,6 +1641,13 @@ fn show_messages(
     }
 }
 
+fn show_reply_preview(ui: &mut egui::Ui, text: &str) {
+    if !text.trim().is_empty() {
+        ui.label(RichText::new("◈  Рей").color(ACCENT).small().strong());
+        ui.add(egui::Label::new(text).selectable(true).wrap());
+    }
+}
+
 fn message_card(ui: &mut egui::Ui, role: &str, text: &str, cache: &mut CommonMarkCache) {
     let user = role == "user";
     let width = ui.available_width().min(670.0);
@@ -1700,16 +1733,35 @@ impl VoiceRequest {
         };
         let (reply, provider) = if let Some(reply) = Agent::answer_game_facts(&turn()) {
             (reply, None)
+        } else if let Some(reply) = self.agent.answer_game_position(&turn()).await {
+            (reply, None)
         } else {
-            let provider = self.agent.provider()?;
-            let reply = self.agent.reply(provider.as_ref(), turn()).await?;
-            (reply, Some(provider))
+            match self.agent.provider() {
+                Ok(provider) => {
+                    let reply = self
+                        .agent
+                        .reply_with_progress(provider.as_ref(), turn(), |fragment| {
+                            self.emit(Event::ReplyFragment(self.id, fragment.to_owned()));
+                        })
+                        .await?;
+                    (reply, Some(provider))
+                }
+                Err(error) => {
+                    let game = turn().game_context.ok_or(error)?;
+                    (
+                        Agent::game_fallback(game, "Подключение к модели не настроено."),
+                        None,
+                    )
+                }
+            }
         };
+        let game_turn = turn().game_context.is_some();
         self.agent.save_reply(&turn(), &reply)?;
         self.emit(Event::Reply(self.id, text, reply.clone()));
         if self.spoken {
             self.emit(Event::Phase(self.id, Phase::Synthesizing));
             if self.agent.config.unload_ollama
+                && !game_turn
                 && let Some(provider) = provider
             {
                 let _ = provider.unload(&self.model).await;

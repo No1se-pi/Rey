@@ -1,6 +1,6 @@
-use super::{Game, Kind, Outcome, Side};
+use super::{Game, Kind, Outcome, PieceView, Side, engine};
 use regex::Regex;
-use std::{fmt::Write, sync::LazyLock};
+use std::{fmt::Write, path::Path, sync::LazyLock, time::Duration};
 
 pub struct GameSnapshot {
     kind: Kind,
@@ -8,7 +8,10 @@ pub struct GameSnapshot {
     user: Side,
     study: bool,
     position: String,
+    engine_position: String,
+    depth: u8,
     moves: Vec<PlayedMove>,
+    last_piece: Option<PieceView>,
     legal: Vec<String>,
     check: bool,
     outcome: Option<Outcome>,
@@ -64,6 +67,8 @@ impl Game {
             user: self.user,
             study: self.study,
             position: self.position(),
+            engine_position: self.engine_position(),
+            depth: self.depth,
             moves: self
                 .moves
                 .iter()
@@ -76,6 +81,7 @@ impl Game {
                     notation: notation.clone(),
                 })
                 .collect(),
+            last_piece: self.last.and_then(|(_, target)| self.piece(target)),
             legal: self
                 .legal()
                 .into_iter()
@@ -202,10 +208,15 @@ fn query(text: &str) -> Option<Query> {
             "видишь",
             "знаешь",
             "что я сделал",
+            "что я походил",
             "что ты сделала",
+            "что ты походила",
             "что сыграл",
+            "что я сыграл",
+            "что ты сыграла",
             "как я ходил",
             "как ты ходила",
+            "как ты сходила",
         ]))
         || contains(&[
             "видишь партию",
@@ -229,13 +240,34 @@ fn query(text: &str) -> Option<Query> {
 }
 
 impl GameSnapshot {
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    pub fn asks_for_engine(text: &str) -> bool {
+        let text = text.trim().trim_end_matches(['?', '.', '!']).to_lowercase();
+        matches!(
+            text.as_str(),
+            "разбери позицию"
+                | "разбери текущую позицию"
+                | "оцени позицию"
+                | "оцени текущую позицию"
+                | "объясни позицию"
+                | "объясни текущую позицию"
+                | "какой ход посоветуешь"
+                | "какой ход лучше"
+                | "какой ход лучше сделать"
+                | "дай подсказку"
+        )
+    }
+
     pub fn concerns_game(text: &str) -> bool {
         static TOPIC: LazyLock<Regex> = LazyLock::new(|| {
             Regex::new(
-            r"\b(?:шахмат\w*|сёги|сеги|(?:мою|моей|эту|этой|нашу|нашей|текущую|текущей) парти\w*|(?:на|с) (?:игровой |шахматной )?доск\w*|(?:текущую|текущей|эту|этой) позици\w*|ход(?:ы|а)? (?:в|из) (?:этой |нашей )?парти\w*|(?:мой|твой|мои|твои|последний|последние) ходы?\b)"
+            r"\b(?:шахмат\w*|сёги|сеги|(?:мою|моей|эту|этой|нашу|нашей|текущую|текущей) парти\w*|(?:на|с) (?:игровой |шахматной )?доск\w*|(?:текущую|текущей|эту|этой) позици\w*|ход(?:ы|а)? (?:в|из) (?:этой |нашей )?парти\w*|(?:мой|твой|мои|твои|моего|твоего|последний|последние|последнего) ход[ыа]?\b)"
         ).unwrap()
         });
-        query(text).is_some() || TOPIC.is_match(&text.to_lowercase())
+        query(text).is_some() || Self::asks_for_engine(text) || TOPIC.is_match(&text.to_lowercase())
     }
 
     pub fn factual_answer(&self, text: &str) -> Option<String> {
@@ -267,9 +299,73 @@ impl GameSnapshot {
     }
 
     pub fn check_model_answer(&self, answer: &str) -> Option<String> {
-        NO_BOARD
-            .is_match(answer)
-            .then(|| self.move_answer(Player::Both, 6))
+        NO_BOARD.is_match(answer).then(|| self.board_summary())
+    }
+
+    pub fn board_summary(&self) -> String {
+        let mut text = self.move_answer(Player::Both, 4);
+        if self.check {
+            text.push_str(" На доске шах.");
+        }
+        if self.outcome.is_none() {
+            let _ = write!(text, " Легальных ходов в позиции: {}.", self.legal.len());
+        }
+        text
+    }
+
+    pub async fn quick_analysis(&self, executable: &Path) -> String {
+        let mut text = self.board_summary();
+        if self.outcome.is_some() || self.legal.is_empty() {
+            return text;
+        }
+        let depth = self.depth.min(7);
+        let analysis = tokio::time::timeout(
+            Duration::from_secs(5),
+            engine::analyze(executable, self.kind, &self.engine_position, depth),
+        )
+        .await;
+        let Ok(Ok(analysis)) = analysis else {
+            text.push_str("\n\nДвижок не успел рассчитать позицию или недоступен.");
+            return text;
+        };
+        let scored_for = self.side.label(self.kind).to_lowercase();
+        let name = analysis.engine.as_deref().unwrap_or("Движок");
+        let _ = write!(
+            text,
+            "\n\n**{name} · глубина {}.**",
+            analysis.depth.unwrap_or(depth)
+        );
+        if let Some(score) = analysis.score {
+            match score {
+                engine::Score::Centipawns(score) => {
+                    let _ = write!(
+                        text,
+                        " Оценка за сторону хода ({scored_for}) — `{score:+} cp`."
+                    );
+                }
+                engine::Score::Mate(mate) => {
+                    let _ = write!(
+                        text,
+                        " Мат по расчёту за сторону хода ({scored_for}) — `{mate:+}`."
+                    );
+                }
+            }
+        }
+        if analysis.best == "win"
+            && let Ok(game) = Game::new(self.kind, &self.position, self.user, 1, depth, true)
+            && game.can_declare()
+        {
+            text.push_str("\n\nДвижок предлагает заявить победу входящего короля.");
+        } else if self.legal.contains(&analysis.best) {
+            let _ = write!(text, "\n\nРекомендуемый ход — `{}`.", analysis.best);
+            if let Ok(game) = Game::new(self.kind, &self.position, self.user, 1, depth, true) {
+                let line = game.verified_line(&analysis.pv[..analysis.pv.len().min(4)]);
+                if line.len() > 1 {
+                    let _ = write!(text, " Вариант — `{}`.", line.join(" "));
+                }
+            }
+        }
+        text
     }
 
     pub fn model_context(&self) -> String {
@@ -297,33 +393,51 @@ impl GameSnapshot {
             },
             self.position
         );
-        let _ = writeln!(facts, "Сыгранные полуходы: {}", self.moves.len());
-        for movement in self.moves.iter().skip(self.moves.len().saturating_sub(12)) {
+        let _ = writeln!(facts, "Недавние ходы (всего {}):", self.moves.len());
+        for movement in self.moves.iter().skip(self.moves.len().saturating_sub(6)) {
             let _ = writeln!(facts, "- {}", self.move_line(movement, true));
         }
-        if let Some(last) = self.moves.last() {
+        if let Some(piece) = self.last_piece {
+            let name = match piece.simple.trim_start_matches('+') {
+                "P" => "пешка",
+                "N" => "конь",
+                "B" => "слон",
+                "R" => "ладья",
+                "Q" => "ферзь",
+                "K" => "король",
+                "L" => "копьё",
+                "G" => "золотой генерал",
+                "S" => "серебряный генерал",
+                _ => piece.symbol,
+            };
             let _ = writeln!(
                 facts,
-                "Последний ход на доске: {}.",
-                self.move_line(last, true)
+                "На клетке назначения последнего хода — {name}{}.",
+                if piece.promoted {
+                    " в превращённом виде"
+                } else {
+                    ""
+                }
             );
         }
         let _ = writeln!(
             facts,
-            "Легальные ходы по координатам (до 24 из {}): {}",
+            "Легальных ходов {}. Примеры: {}.",
             self.legal.len(),
             self.legal
                 .iter()
-                .take(24)
-                .cloned()
+                .take(8)
+                .map(String::as_str)
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        if let Some(analysis) = &self.analysis {
-            let _ = writeln!(
-                facts,
-                "Последний расчёт движка. Применяй оценку только к позиции, указанной в расчёте: {analysis}"
-            );
+        if let Some(analysis) = self.analysis.as_deref().and_then(|analysis| {
+            analysis
+                .strip_prefix("Позиция анализа: ")?
+                .strip_prefix(&self.position)?
+                .strip_prefix(". ")
+        }) {
+            let _ = writeln!(facts, "Расчёт движка: {analysis}");
         }
         facts
     }
